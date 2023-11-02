@@ -1,0 +1,180 @@
+#--------------------------IMPORTS------------------------------------------------------------
+
+from mesa import Agent, Model
+from mesa.space import SingleGrid
+from mesa.time import SimultaneousActivation
+from mesa.datacollection import DataCollector
+
+import matplotlib.pyplot as plt
+import matplotlib as mlp
+import matplotlib.animation as animation
+plt.rcParams["animation.html"] = "jshtml"
+mlp.rcParams['animation.embed_limit'] = 2**128
+
+import numpy as np
+import pandas as pd
+
+import time
+import datetime
+
+from matplotlib.animation import FFMpegWriter
+
+
+
+#-----------------------------CREAR MODELO-------------------------------------------------------
+class GameLifeAgent(Agent):
+    def __init__(self, unique_id, model):
+        super().__init__(unique_id, model)
+        self.especie = np.random.choice([0,1]) #0 es presa, 1 es depredador
+        self.next_state = None
+
+    def step(self):
+        neighbours = self.model.grid.get_neighbors(
+            self.pos,
+            moore=True,
+            include_center=False)
+        
+        presas=0
+        depredadores=0
+        total=0
+        for neighbor in neighbours:
+            if neighbor.especie==0:
+                presas=presas+1
+                total=total+1
+            elif neighbor.especie==1:
+                depredadores=depredadores+1
+                total=total+1
+        
+        self.next_state = self.especie
+        probabilidades = [(depredadores*100/total)/100, (presas*100/total)/100]  
+
+        if depredadores>presas and self.especie==0:
+            self.next_state= np.random.choice([1, 0], p=probabilidades)
+        if presas>depredadores and self.especie==1:
+            self.next_state= np.random.choice([1, 0], p=probabilidades)
+        if presas==depredadores:
+            self.next_state= np.random.choice([0,1])
+        if presas==0:
+            self.next_state=0
+        if depredadores==0:
+            self.next_state=1
+
+    def advance(self):
+        self.especie = self.next_state
+
+class GameLifeModel(Model):
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+        self.reset()
+
+    def reset(self):
+        self.num_agents = self.width * self.height
+        self.grid = SingleGrid(self.width, self.height, True)
+        self.schedule = SimultaneousActivation(self)
+
+        for (content, pos) in self.grid.coord_iter():
+            a = GameLifeAgent(pos, self)
+            self.grid.place_agent(a, pos)
+            self.schedule.add(a)
+
+        self.datacollector = DataCollector(
+            model_reporters={"Grid": self.get_grid,
+                             "Depredadores": self.get_depredadores,
+                             "Presas": self.get_presas
+                             }
+        )
+
+    def step(self):
+        self.datacollector.collect(self)
+        self.schedule.step()
+
+    def get_grid(self):
+        grid = np.zeros((self.grid.width, self.grid.height))
+
+        for cell in self.grid.coord_iter():
+            cell_content, pos = cell
+            x, y = pos
+            grid[x][y] = cell_content.especie
+
+        return grid
+
+    def get_depredadores(self):
+        total_depredadores_agents = 0
+
+        for cell in model.grid.coord_iter():
+            agent, _ = cell
+            if isinstance(agent, GameLifeAgent):
+                total_depredadores_agents += agent.especie
+
+        return total_depredadores_agents
+    
+    def get_presas(self):
+        total_presas_agents = 0
+
+        for cell in model.grid.coord_iter():
+            agent, _ = cell
+            if isinstance(agent, GameLifeAgent):
+                if agent.especie==0:
+                    total_presas_agents+=1
+
+        return total_presas_agents
+
+
+
+#-------------------------------EJECUCION MODEO--------------------------------------
+GRID_SIZE = 100
+NUM_GENERATIONS = 200
+start_time = time.time()
+
+model = GameLifeModel(GRID_SIZE, GRID_SIZE)
+for i in range(NUM_GENERATIONS):
+    model.step()
+final_time = time.time()
+
+print('Tiempo de ejecución:', str(datetime.timedelta(seconds=(final_time - start_time))))
+
+
+
+#--------------------------------SIMULACION------------------------------------------
+all_grids = model.datacollector.get_model_vars_dataframe()
+
+writer = FFMpegWriter(fps=10, metadata=dict(artist='Your Name'), bitrate=1800)
+
+fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(7,7))
+
+axs.set_xticks([])
+axs.set_yticks([])
+
+colors = []
+colors.append(np.array([255 / 255, 255 / 255, 40 / 255, 1]))
+colors.append(np.array([255 / 255, 80 / 255, 80 / 255, 1]))
+colormap = mlp.colors.ListedColormap(colors)
+
+patch_grid = axs.imshow(all_grids['Grid'].iloc[0], cmap=colormap, vmin=0, vmax=1)
+
+cells_presas = []
+cells_depredadores = []
+
+def animate(i):
+    patch_grid.set_data(all_grids['Grid'].iloc[i])
+    cells_presas.append(all_grids['Presas'].iloc[i])
+    cells_depredadores.append(all_grids['Depredadores'].iloc[i])
+
+anim = animation.FuncAnimation(fig, animate, frames=NUM_GENERATIONS)
+anim.save("animation.mp4", writer=writer)
+plt.show()
+
+
+
+#-------------------------FIGURA---------------------------------------------------
+fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(10,5))
+
+axs.set_xlabel("Step")
+axs.set_ylabel("Cantidad de agentes")
+
+plt.plot(cells_presas, label='Presas', color='yellow')
+plt.plot(cells_depredadores, label='Depredadores', color='red')
+plt.legend()
+plt.show()
